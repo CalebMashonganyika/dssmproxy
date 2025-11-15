@@ -10,8 +10,13 @@ app.use(bodyParser.urlencoded({ extended: true }));
 const SECRET = process.env.SECRET;
 const TARGET_BASE = process.env.TARGET_BASE;
 
-async function createBrowser() {
-    return await puppeteer.launch({
+let browser; // reused browser instance
+
+// ---------- Launch Browser ----------
+async function getBrowser() {
+    if (browser && browser.isConnected()) return browser;
+
+    browser = await puppeteer.launch({
         headless: "new",
         args: [
             "--no-sandbox",
@@ -22,53 +27,63 @@ async function createBrowser() {
             "--single-process"
         ]
     });
+
+    return browser;
 }
 
+// ---------- Proxy Route ----------
 app.all('/proxy/*', async (req, res) => {
     try {
-        // Validate secret
+        // Authenticate
         const clientSecret = req.headers['x-proxy-secret'];
         if (clientSecret !== SECRET) {
-            return res.status(401).json({ error: "Unauthorized" });
+            return res.status(401).json({ error: 'Unauthorized' });
         }
 
-        const path = req.params[0]; // everything after /proxy/
+        // Build target URL
+        const path = req.params[0]; 
         const targetUrl = `${TARGET_BASE}/${path}`;
 
-        const browser = await createBrowser();
+        const browser = await getBrowser();
         const page = await browser.newPage();
+
+        await page.setUserAgent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+        );
 
         let responseBody;
 
         if (req.method === "POST") {
-            // Submit POST through puppeteer
+            // POST request through puppeteer
             responseBody = await page.evaluate(
                 async (url, body) => {
-                    const result = await fetch(url, {
+                    const res = await fetch(url, {
                         method: "POST",
                         headers: { "Content-Type": "application/x-www-form-urlencoded" },
                         body: new URLSearchParams(body)
                     });
-                    return await result.text();
+                    return await res.text();
                 },
                 targetUrl,
                 req.body
             );
         } else {
-            // Normal GET
+            // GET request
             await page.goto(targetUrl, { waitUntil: "networkidle0" });
             responseBody = await page.content();
         }
 
-        await browser.close();
+        await page.close();
+
         res.send(responseBody);
 
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: err.toString() });
+    } catch (error) {
+        console.error("Proxy Error:", error);
+        res.status(500).json({ error: error.toString() });
     }
 });
 
+// ---------- Start Server ----------
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
     console.log(`DSSM Proxy running on port ${PORT}`);
