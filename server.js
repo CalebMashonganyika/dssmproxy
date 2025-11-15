@@ -33,23 +33,30 @@ app.post("/paynow/initiate", async (req, res) => {
     try {
         const { amount, email, phone } = req.body;
 
-        const paynowPayload = {
+        const params = new URLSearchParams({
             id: process.env.PAYNOW_INTEGRATION_ID,
             reference: "DSSM-" + Date.now(),
-            amount,
+            amount: amount,
             authEmail: email,
-            phone,
-            returnUrl: process.env.RETURN_URL,
-            resultUrl: process.env.RESULT_URL
-        };
-
-        const response = await fetch("https://www.paynow.co.zw/interface/initiatetransaction", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(paynowPayload)
+            phone: phone,
+            returnurl: process.env.RETURN_URL,
+            resulturl: process.env.RESULT_URL
         });
 
-        const data = await response.json();
+        const response = await fetch(
+            "https://www.paynow.co.zw/interface/initiatetransaction",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/x-www-form-urlencoded"
+                },
+                body: params.toString()
+            }
+        );
+
+        const text = await response.text();
+        const data = Object.fromEntries(new URLSearchParams(text));
+
         res.json(data);
 
     } catch (err) {
@@ -72,7 +79,8 @@ app.get("/paynow/status", async (req, res) => {
         const response = await fetch(pollUrl);
         const text = await response.text();
 
-        res.send(text);
+        const data = Object.fromEntries(new URLSearchParams(text));
+        res.json(data);
 
     } catch (err) {
         console.error("STATUS ERROR:", err);
