@@ -1,90 +1,89 @@
-require('dotenv').config();
-const express = require('express');
-const bodyParser = require('body-parser');
-const puppeteer = require('puppeteer');
+import express from "express";
+import dotenv from "dotenv";
+import cors from "cors";
+import fetch from "node-fetch";
 
+dotenv.config();
 const app = express();
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+app.use(express.json());
+app.use(cors());
 
-const SECRET = process.env.SECRET;
-const TARGET_BASE = process.env.TARGET_BASE;
+// =============================
+//  SECURITY KEY MIDDLEWARE
+// =============================
+app.use((req, res, next) => {
+    const key = req.headers["x-paynow-key"];
+    if (!key || key !== process.env.PROXY_SECRET_KEY) {
+        return res.status(401).json({ error: "Unauthorized" });
+    }
+    next();
+});
 
-let browser; // reused browser instance
+// =============================
+//  TEST ROUTE
+// =============================
+app.get("/", (req, res) => {
+    res.json({ status: "Paynow Proxy Running" });
+});
 
-// ---------- Launch Browser ----------
-async function getBrowser() {
-    if (browser && browser.isConnected()) return browser;
-
-    browser = await puppeteer.launch({
-        headless: "new",
-        args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-gpu",
-            "--no-zygote",
-            "--single-process"
-        ]
-    });
-
-    return browser;
-}
-
-// ---------- Proxy Route ----------
-app.all('/proxy/*', async (req, res) => {
+// =============================
+//  POST /paynow/initiate
+// =============================
+app.post("/paynow/initiate", async (req, res) => {
     try {
-        // Authenticate
-        const clientSecret = req.headers['x-proxy-secret'];
-        if (clientSecret !== SECRET) {
-            return res.status(401).json({ error: 'Unauthorized' });
-        }
+        const { amount, email, phone } = req.body;
 
-        // Build target URL
-        const path = req.params[0]; 
-        const targetUrl = `${TARGET_BASE}/${path}`;
+        const paynowPayload = {
+            id: process.env.PAYNOW_INTEGRATION_ID,
+            reference: "DSSM-" + Date.now(),
+            amount,
+            authEmail: email,
+            phone,
+            returnUrl: process.env.RETURN_URL,
+            resultUrl: process.env.RESULT_URL
+        };
 
-        const browser = await getBrowser();
-        const page = await browser.newPage();
+        const response = await fetch("https://www.paynow.co.zw/interface/initiatetransaction", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(paynowPayload)
+        });
 
-        await page.setUserAgent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
-        );
+        const data = await response.json();
+        res.json(data);
 
-        let responseBody;
-
-        if (req.method === "POST") {
-            // POST request through puppeteer
-            responseBody = await page.evaluate(
-                async (url, body) => {
-                    const res = await fetch(url, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-                        body: new URLSearchParams(body)
-                    });
-                    return await res.text();
-                },
-                targetUrl,
-                req.body
-            );
-        } else {
-            // GET request
-            await page.goto(targetUrl, { waitUntil: "networkidle0" });
-            responseBody = await page.content();
-        }
-
-        await page.close();
-
-        res.send(responseBody);
-
-    } catch (error) {
-        console.error("Proxy Error:", error);
-        res.status(500).json({ error: error.toString() });
+    } catch (err) {
+        console.error("INITIATE ERROR:", err);
+        res.status(500).json({ error: "Failed to initiate payment" });
     }
 });
 
-// ---------- Start Server ----------
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-    console.log(`DSSM Proxy running on port ${PORT}`);
+// =============================
+//  GET /paynow/status?pollUrl=...
+// =============================
+app.get("/paynow/status", async (req, res) => {
+    try {
+        const pollUrl = req.query.pollUrl;
+
+        if (!pollUrl) {
+            return res.status(400).json({ error: "Missing pollUrl parameter" });
+        }
+
+        const response = await fetch(pollUrl);
+        const text = await response.text();
+
+        res.send(text);
+
+    } catch (err) {
+        console.error("STATUS ERROR:", err);
+        res.status(500).json({ error: "Failed to fetch payment status" });
+    }
+});
+
+// =============================
+//  START SERVER
+// =============================
+const port = process.env.PORT || 10000;
+app.listen(port, () => {
+    console.log(`DSSM Proxy running on port ${port}`);
 });
