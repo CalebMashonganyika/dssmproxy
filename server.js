@@ -41,7 +41,7 @@ app.post("/paynow/initiate", async (req, res) => {
     const params = new URLSearchParams({
       id: process.env.PAYNOW_INTEGRATION_ID,
       reference: "DSSM-" + Date.now(),
-      amount: amount.toString(),
+      amount: Math.floor(parseFloat(amount)).toString(), // Ensure integer amount
       authemail: email, // FIXED: Changed from authEmail to authemail
       phone: phone,
       returnurl: process.env.RETURN_URL,
